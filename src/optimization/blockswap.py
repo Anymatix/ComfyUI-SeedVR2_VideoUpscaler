@@ -809,6 +809,31 @@ def set_blockswap_bypass(runner, bypass: bool, debug):
         debug.log("BlockSwap protection renabled to avoid accidentally offloading the entire DiT model", category="success")
 
 
+
+def _restore_method(obj: Any, name: str, original: Any) -> None:
+    """
+    Undo an instance-level method patch.
+
+    Wrapping stores a bound method on the instance (``obj.forward = ...``). If
+    the method being restored is just the class's own method bound to ``obj``,
+    assigning it back would store ``obj -> bound method -> obj`` in the
+    instance ``__dict__``: a reference cycle that refcounting never frees. For a
+    DiT whose blocks are swapped to CPU, that cycle keeps every CPU-resident
+    weight of the model alive after ``cleanup_dit`` deletes it, until the next
+    full ``gc.collect()``. Deleting the instance attribute restores the class
+    method lookup with no cycle. Anything else (a method that was already an
+    instance attribute before wrapping) is assigned back unchanged.
+    """
+    class_attr = getattr(type(obj), name, None)
+    if (getattr(original, '__self__', None) is obj
+            and class_attr is not None
+            and getattr(original, '__func__', None) is getattr(class_attr, '__func__', class_attr)):
+        if name in obj.__dict__:
+            object.__delattr__(obj, name)
+    else:
+        setattr(obj, name, original)
+
+
 def cleanup_blockswap(runner, keep_state_for_cache=False):
     """
     Clean up BlockSwap configuration based on caching mode.
@@ -868,7 +893,7 @@ def cleanup_blockswap(runner, keep_state_for_cache=False):
         restored_count = 0
         for block in model.blocks:
             if hasattr(block, '_original_forward'):
-                block.forward = block._original_forward
+                _restore_method(block, 'forward', block._original_forward)
                 delattr(block, '_original_forward')
                 restored_count += 1
                 
@@ -883,7 +908,7 @@ def cleanup_blockswap(runner, keep_state_for_cache=False):
     # 2. Restore RoPE patches
     if hasattr(model, '_rope_patches'):
         for module, original_method in model._rope_patches:
-            module.get_axial_freqs = original_method
+            _restore_method(module, 'get_axial_freqs', original_method)
             # Clean up wrapper attributes
             for attr in ['_rope_wrapped', '_original_get_axial_freqs']:
                 if hasattr(module, attr):
@@ -895,7 +920,7 @@ def cleanup_blockswap(runner, keep_state_for_cache=False):
     if hasattr(model, '_io_swappers'):
         for module, module_name in model._io_swappers:
             if hasattr(module, '_original_forward'):
-                module.forward = module._original_forward
+                _restore_method(module, 'forward', module._original_forward)
                 # Clean up wrapper attributes
                 for attr in ['_original_forward', '_model_ref', '_debug_ref', 
                            '_module_name', '_is_io_wrapped']:
@@ -917,7 +942,7 @@ def cleanup_blockswap(runner, keep_state_for_cache=False):
 
     # 4. Restore original .to() method
     if hasattr(model, '_original_to'):
-        model.to = model._original_to
+        _restore_method(model, 'to', model._original_to)
         delattr(model, '_original_to')
         debug.log("Restored original .to() method", category="success")
 

@@ -1096,6 +1096,15 @@ def cleanup_dit(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
     runner.sampling_timesteps = None
     runner.schedule = None
 
+    # 7. Collect any reference cycle the deleted DiT still sits in, now rather
+    # than at the next full GC: with BlockSwap its weights live on the CPU,
+    # where release_model_memory does not touch them, so a single remaining
+    # cycle keeps the whole model resident through VAE decoding.
+    if not cache_model:
+        model = None
+        actual_obj = None
+        gc.collect()
+
 
 def cleanup_vae(runner: Any, debug: Optional['Debug'] = None, cache_model: bool = False) -> None:
     """

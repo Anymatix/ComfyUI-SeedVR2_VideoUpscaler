@@ -793,6 +793,8 @@ def upscale_all_batches(
                             category="blockswap", indent_level=1)
 
         # Cleanup DiT as it's no longer needed after upscaling
+        # (drop this frame's reference first, so cleanup_dit can free it)
+        dit_model = None
         cleanup_dit(runner=runner, debug=debug, cache_model=cache_model)
         
         # Cleanup text embeddings as they're no longer needed after upscaling
